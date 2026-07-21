@@ -93,6 +93,15 @@ def generar(payload: GenerarRequest):
     hijos = hijos_normalizados
     context["hijos"] = hijos
 
+    # Airtable puede mandar null en campos vacíos (ej. domicilio no
+    # disponible en el certificado de nacimiento, ya que este tipo de
+    # certificado no trae esa información). Sin este saneo, Jinja2
+    # imprime el texto literal "None" en vez de dejarlo vacío.
+    for h in hijos:
+        for key in h:
+            if h[key] is None:
+                h[key] = ""
+
     # Normaliza "edad" a entero: si llega como texto desde Airtable/Make
     # (ej. "15" en vez de 15), la comparación "hijo.edad < 18" dentro de
     # la plantilla puede fallar o comportarse mal al comparar texto con

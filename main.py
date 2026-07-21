@@ -69,6 +69,30 @@ def generar(payload: GenerarRequest):
     context = payload.context
     hijos = context.get("hijos") or []
 
+    # Airtable/Make manda las keys de cada hijo en PascalCase con prefijo
+    # "Hijo" (HijoNombre, HijoRUT, HijoDomicilio, HijoFechaNacimiento,
+    # HijoEdad, HijoGenero). El resto de esta función usa snake_case sin
+    # prefijo (nombre, rut, domicilio, fecha_nacimiento, edad, genero) —
+    # se traduce acá, una sola vez, para no depender de cómo esté
+    # configurado el Array Aggregator en Make.
+    MAPA_KEYS_HIJO = {
+        "HijoNombre": "nombre",
+        "HijoRUT": "rut",
+        "HijoDomicilio": "domicilio",
+        "HijoFechaNacimiento": "fecha_nacimiento",
+        "HijoEdad": "edad",
+        "HijoGenero": "genero",
+    }
+    hijos_normalizados = []
+    for h in hijos:
+        h_norm = dict(h)
+        for key_original, key_nueva in MAPA_KEYS_HIJO.items():
+            if key_original in h_norm:
+                h_norm[key_nueva] = h_norm.pop(key_original)
+        hijos_normalizados.append(h_norm)
+    hijos = hijos_normalizados
+    context["hijos"] = hijos
+
     # Normaliza "edad" a entero: si llega como texto desde Airtable/Make
     # (ej. "15" en vez de 15), la comparación "hijo.edad < 18" dentro de
     # la plantilla puede fallar o comportarse mal al comparar texto con

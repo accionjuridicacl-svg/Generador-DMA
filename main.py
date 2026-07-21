@@ -16,7 +16,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from docxtpl import DocxTemplate
+from docxtpl import DocxTemplate, RichText
 from extractor_certificados import extraer_certificado
 import tempfile
 import io
@@ -66,9 +66,96 @@ def generar(payload: GenerarRequest):
     if not os.path.exists(TEMPLATE_PATH):
         raise HTTPException(500, "No se encontró DMA_Template.docx en el servidor")
 
+    context = payload.context
+    hijos = context.get("hijos") or []
+    context["todos_hijos_mayores"] = bool(hijos) and all(
+        (h.get("edad") or 0) >= 18 for h in hijos
+    )
+
+    # Si no se especifica, por defecto SÍ se incluye la cláusula de gastos
+    # extraordinarios (Ley 14.908) — se puede desactivar por caso pasando
+    # "gastos_extraordinarios_aplica": false cuando no corresponda.
+    if "gastos_extraordinarios_aplica" not in context:
+        context["gastos_extraordinarios_aplica"] = True
+
+    # Arma la lista numerada de documentos del SEGUNDO OTROSÍ dinámicamente,
+    # para que la numeración sea siempre correcta sin importar cuántos hijos,
+    # testigos, o condiciones (mediación, informe de cese, etc.) apliquen
+    # en este caso. Los nombres de personas van en negrita (RichText) y en
+    # mayúscula. Los ítems sin dato real (ej. informe de cese no aportado)
+    # se omiten en vez de mostrarse vacíos.
+    demandante = context.get("demandante") or {}
+    demandado = context.get("demandado") or {}
+    alimentos = context.get("alimentos") or {}
+    rdr = context.get("relacion_directa_regular") or {}
+    testigos = context.get("testigos") or []
+
+    def doc_simple(texto):
+        rt = RichText()
+        rt.add(texto)
+        return rt
+
+    def doc_con_nombre_bold(antes, nombre, despues):
+        rt = RichText()
+        rt.add(antes)
+        rt.add((nombre or "").upper(), bold=True)
+        rt.add(despues)
+        return rt
+
+    docs = []
+    docs.append(doc_simple(
+        "Acta de acuerdo regulatorio de relaciones mutuas suscrito entre los "
+        "comparecientes, para su aprobación judicial."
+    ))
+    docs.append(doc_con_nombre_bold(
+        "Certificado de matrimonio entre ", demandante.get("nombre"), ""
+    ))
+    docs[-1].add(" y ")
+    docs[-1].add((demandado.get("nombre") or "").upper(), bold=True)
+    docs[-1].add(".")
+
+    fecha_informe_cese = (context.get("fecha_informe_cese") or "").strip()
+    if fecha_informe_cese and fecha_informe_cese.upper() != "XXXXXX":
+        docs.append(doc_simple(f"Informe de Cese de convivencia de fecha {fecha_informe_cese}."))
+
+    for hijo in hijos:
+        nombre_hijo = (hijo.get("nombre") or "").strip()
+        if nombre_hijo:
+            docs.append(doc_con_nombre_bold("Certificado de nacimiento de ", nombre_hijo, "."))
+
+    if alimentos.get("tipo") == "mediacion_previa" or rdr.get("tipo") == "mediacion_previa":
+        # Se usan los datos de alimentos si existen; si no, los de RDR.
+        fuente = alimentos if alimentos.get("tipo") == "mediacion_previa" else rdr
+        fecha_mediacion = fuente.get("fecha_mediacion", "")
+        fecha_resolucion = fuente.get("fecha_resolucion", "")
+        rit = fuente.get("rit", "")
+        tribunal_origen = fuente.get("tribunal_origen", "")
+        docs.append(doc_simple(f"Acta de mediación de fecha {fecha_mediacion}."))
+        docs.append(doc_simple(
+            f"Resolución que aprueba mediación de fecha {fecha_resolucion}, "
+            f"dictada en causa RIT {rit} del Juzgado de Familia de {tribunal_origen}."
+        ))
+
+    for testigo in testigos:
+        nombre_testigo = (testigo.get("nombre") or "").strip()
+        if nombre_testigo:
+            docs.append(doc_con_nombre_bold(
+                "Declaración jurada de testigo de ", nombre_testigo,
+                ", suscrita con firma electrónica simple mediante Oficina Judicial "
+                "Virtual, de acuerdo a lo dispuesto en el inciso final del artículo "
+                "64 bis de la ley 19.968."
+            ))
+
+    docs.append(doc_simple(
+        "Certificado de IUS POSTULANDI vigente de la estudiante habilitada en "
+        "Derecho KARIN PAZ VALENZUELA AGUILAR."
+    ))
+
+    context["documentos_acompanados"] = docs
+
     tpl = DocxTemplate(TEMPLATE_PATH)
     try:
-        tpl.render(payload.context)
+        tpl.render(context)
     except Exception as e:
         raise HTTPException(422, f"Error al renderizar la plantilla: {e}")
 

@@ -68,8 +68,19 @@ def generar(payload: GenerarRequest):
 
     context = payload.context
     hijos = context.get("hijos") or []
+
+    # Normaliza "edad" a entero: si llega como texto desde Airtable/Make
+    # (ej. "15" en vez de 15), la comparación "hijo.edad < 18" dentro de
+    # la plantilla puede fallar o comportarse mal al comparar texto con
+    # número. Se hace acá, una sola vez, para todo el documento.
+    for h in hijos:
+        try:
+            h["edad"] = int(h.get("edad") or 0)
+        except (ValueError, TypeError):
+            h["edad"] = 0
+
     context["todos_hijos_mayores"] = bool(hijos) and all(
-        (h.get("edad") or 0) >= 18 for h in hijos
+        h["edad"] >= 18 for h in hijos
     )
 
     # Si no se especifica, por defecto SÍ se incluye la cláusula de gastos
@@ -90,16 +101,23 @@ def generar(payload: GenerarRequest):
     rdr = context.get("relacion_directa_regular") or {}
     testigos = context.get("testigos") or []
 
+    # docxtpl RichText NO hereda la fuente/tamaño del documento — hay que
+    # especificarlo en cada .add() o queda con la fuente por defecto de
+    # Word (Calibri 11), distinta al resto del documento (Times New Roman
+    # 12pt / tamaño 24 en semi-puntos).
+    FUENTE = "Times New Roman"
+    TAMANO = 24  # 12pt, en semi-puntos (unidad que usa python-docx/docxtpl)
+
     def doc_simple(texto):
         rt = RichText()
-        rt.add(texto)
+        rt.add(texto, font=FUENTE, size=TAMANO)
         return rt
 
     def doc_con_nombre_bold(antes, nombre, despues):
         rt = RichText()
-        rt.add(antes)
-        rt.add((nombre or "").upper(), bold=True)
-        rt.add(despues)
+        rt.add(antes, font=FUENTE, size=TAMANO)
+        rt.add((nombre or "").upper(), bold=True, font=FUENTE, size=TAMANO)
+        rt.add(despues, font=FUENTE, size=TAMANO)
         return rt
 
     docs = []
@@ -110,9 +128,9 @@ def generar(payload: GenerarRequest):
     docs.append(doc_con_nombre_bold(
         "Certificado de matrimonio entre ", demandante.get("nombre"), ""
     ))
-    docs[-1].add(" y ")
-    docs[-1].add((demandado.get("nombre") or "").upper(), bold=True)
-    docs[-1].add(".")
+    docs[-1].add(" y ", font=FUENTE, size=TAMANO)
+    docs[-1].add((demandado.get("nombre") or "").upper(), bold=True, font=FUENTE, size=TAMANO)
+    docs[-1].add(".", font=FUENTE, size=TAMANO)
 
     fecha_informe_cese = (context.get("fecha_informe_cese") or "").strip()
     if fecha_informe_cese and fecha_informe_cese.upper() != "XXXXXX":
